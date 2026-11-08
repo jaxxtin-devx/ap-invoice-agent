@@ -2,7 +2,12 @@
 import os, re, json, base64, sqlite3, time, difflib, html, datetime as dt
 import streamlit as st, pandas as pd, pdfplumber
 
-MODEL = os.getenv("CLAUDE_MODEL", "claude-sonnet-5-5")
+# MODEL = os.getenv("CLAUDE_MODEL", "claude-sonnet-5-5")
+@st.cache_resource
+def gemini_client():
+    from google import genai
+    return genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
 TOL = 0.02  # ASSUMPTION: 2% over-PO tolerance, configurable per company
 CONF_MIN = 0.7
 VENDORS = ["Acme Supplies Ltd", "Globex Corporation", "Initech Solutions", "Umbrella Logistics"]
@@ -308,17 +313,18 @@ def regex_extract(text):
             "tax": (lambda s: float(s.replace(",", "")) if s else None)(g(r"(?im)^\s*tax[^:\n]*:\s*\$?\s*([\d,]+\.\d{2})")),
             "total": float(t.replace(",", "")) if t else None, "confidence": 0.9 if t else 0.5, "notes": "regex fallback"}
 def extract(pdf_bytes):
-    if os.getenv("ANTHROPIC_API_KEY"):
+    err = "No API key; used regex fallback"
+    if os.getenv("GEMINI_API_KEY"):
         try:
-            import anthropic
-            m = anthropic.Anthropic().messages.create(model=MODEL, max_tokens=800, messages=[{"role": "user", "content": [
-                {"type": "document", "source": {"type": "base64", "media_type": "application/pdf", "data": base64.b64encode(pdf_bytes).decode()}},
-                {"type": "text", "text": PROMPT}]}])
-            r = re.sub(r"^```(?:json)?|```$", "", m.content[0].text.strip()).strip()
-            d = json.loads(r); d["engine"] = f"Claude ({MODEL})"; return d
+            from google import genai
+            from google.genai import types
+            m = gemini_client().models.generate_content(
+                model=GEMINI_MODEL,
+                contents=[types.Part.from_bytes(data=pdf_bytes, mime_type="application/pdf"), PROMPT])
+            d = json.loads(re.sub(r"^```(?:json)?|```$", "", m.text.strip()).strip())
+            d["engine"] = f"Gemini ({GEMINI_MODEL})"; return d
         except Exception as e:
-            err = f"AI extraction failed ({type(e).__name__}); used regex fallback"
-    else: err = "No API key; used regex fallback"
+            err = f"Gemini failed ({type(e).__name__}: {str(e)[:120]}); used regex fallback"
     import io
     with pdfplumber.open(io.BytesIO(pdf_bytes)) as p: text = "\n".join(pg.extract_text() or "" for pg in p.pages)
     d = regex_extract(text); d["engine"] = "regex"; d["notes"] = err
