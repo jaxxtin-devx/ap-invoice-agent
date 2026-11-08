@@ -1,5 +1,5 @@
-streamlit
-pdfplumber
-reportlab
-pandas
-anthropic
+   streamlit
+   pdfplumber
+   reportlab
+   pandas
+   google-genai
